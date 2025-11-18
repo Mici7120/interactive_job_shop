@@ -68,13 +68,11 @@ solve :: int_search(
     complete
 ) minimize end + balance;
 
-
 output [
-  "Makespan: \(end)\n",
-  "Balance: \(balance)\n",
-  "Asignacion de operarios:\n"
-] ++
-[
-  "Job \(i) Task \(j) -> Op: \(o[i,j]) Start: \(s[i,j]) Finish: \(f[i,j])\n"
-  | i in JOB, j in TASK
+  "s=\(s);\n",          % Tiempos de inicio (variable de decisión)
+  "f=\(f);\n",          % Tiempos de fin (variable de decisión)
+  "o=\(o);\n",          % Operarios (variable de decisión)
+  "end=\(end);\n",      % Makespan (variable de decisión)
+  "balance=\(balance);\n",% Balance (variable de decisión)
+  "m=\(m);\n"           % Máquinas (dato de entrada, pero lo necesitamos para el gráfico)
 ];
