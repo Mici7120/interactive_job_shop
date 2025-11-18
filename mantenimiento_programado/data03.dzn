@@ -1,0 +1,17 @@
+%con mantenimineto intermedio
+n_jobs = 3;
+n_machines = 3;
+n_ops_for = [2, 3, 1];
+dur = array2d(1..3, 1..3, [
+  4, 3, 0,
+  5, 2, 4,
+  6, 0, 0
+]);
+machine_for = array2d(1..3, 1..3, [
+  1, 2, 0,
+  2, 3, 1,
+  3, 0, 0
+]);
+maint_start = [10, 7, 8];
+maint_end   = [13, 10, 11];
+

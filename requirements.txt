@@ -1,0 +1,4 @@
+flask
+minizinc
+plotly
+pandas

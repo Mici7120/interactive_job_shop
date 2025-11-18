@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visualizador JSSP con MiniZinc</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        body { background-color: #f8f9fa; }
+        .container { max-width: 1000px; }
+        .card { margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container mt-5">
+        <div class="text-center">
+            <h1 class="mb-3">Herramienta de Visualización JSSP</h1>
+            <p class="lead">Proyecto de Programación por Restricciones</p>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header">
+                <strong>1. Configurar Ejecución</strong>
+            </div>
+            <div class="card-body">
+                <form method="POST" enctype="multipart/form-data">
+                    
+                    <div class="mb-3">
+                        <label for="model_select" class="form-label">
+                            <strong>A. Seleccionar Modelo (.mzn)</strong>
+                        </label>
+                        <select class="form-select" id="model_select" name="model_file" required>
+                            <option value="" disabled {% if not selected_model %}selected{% endif %}>
+                                -- Elige un modelo --
+                            </option>
+                            {% for model in model_list %}
+                                <option value="{{ model }}" {% if model == selected_model %}selected{% endif %}>
+                                    {{ model }}
+                                </option>
+                            {% endfor %}
+                        </select>
+                        {% if not model_list %}
+                            <div class="form-text text-danger">
+                                No se encontraron archivos .mzn en la carpeta /models.
+                            </div>
+                        {% endif %}
+                    </div>
+                    <div class="mb-3">
+                         <label for="dzn_file_input" class="form-label">
+                            <strong>B. Cargar Instancia (.dzn)</strong>
+                        </label>
+                        <input type="file" class="form-control" id="dzn_file_input" name="dzn_file" accept=".dzn" required>
+                    </div>
+                    <button class="btn btn-primary w-100" type="submit">Ejecutar Modelo</button>
+                </form>
+            </div>
+        </div>
+
+        {% if graph_json or error %}
+        <div class="card shadow-sm mt-4">
+            <div class="card-header">
+                <strong>2. Resultados de la Ejecución</strong>
+            </div>
+            <div class="card-body">
+                {% if error %}
+                    <div class="alert alert-danger" role="alert">
+                        <strong>Error:</strong> {{ error }}
+                    </div>
+                {% elif graph_json %}
+                    <div class="alert alert-success" role="alert">
+                        Se encontró una solución para <strong>{{ filename }}</strong> 
+                        usando el modelo <strong>{{ selected_model }}</strong>.
+                        <br>
+                        <strong>Makespan (Tiempo Total): {{ makespan }}</strong>
+                    </div>
+                    <div id="ganttChart"></div>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+
+    </div>
+
+    <script>
+        // Esta variable 'graph_json' es inyectada por Flask
+        var graphData = {{ graph_json | safe }};
+
+        if (graphData) {
+            var fig = JSON.parse(graphData);
+            var chartDiv = document.getElementById('ganttChart');
+            
+            // Usar Plotly.js para dibujar el gráfico
+            Plotly.newPlot(chartDiv, fig.data, fig.layout, {responsive: true});
+        }
+    </script>
+</body>
+</html>
