@@ -2,96 +2,187 @@
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Visualizador JSSP con MiniZinc</title>
+    <title>Job Shop Scheduling con MiniZinc y Flask</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.30.0.min.js" charset="utf-8"></script>
     <style>
-        body { background-color: #f8f9fa; }
-        .container { max-width: 1000px; }
-        .card { margin-top: 20px; }
+        .container { max-width: 1200px; }
+        .gantt-container { min-height: 500px; margin-top: 20px; }
+        textarea { font-family: monospace; }
     </style>
 </head>
 <body>
-    <div class="container mt-5">
-        <div class="text-center">
-            <h1 class="mb-3">Herramienta de Visualización JSSP</h1>
-            <p class="lead">Proyecto de Programación por Restricciones</p>
-        </div>
+    <div class="container my-5">
+        <h1 class="mb-4">Asignación de Tareas con MiniZinc</h1>
 
-        <div class="card shadow-sm">
-            <div class="card-header">
-                <strong>1. Configurar Ejecución</strong>
-            </div>
-            <div class="card-body">
-                <form method="POST" enctype="multipart/form-data">
-                    
-                    <div class="mb-3">
-                        <label for="model_select" class="form-label">
-                            <strong>A. Seleccionar Modelo (.mzn)</strong>
-                        </label>
-                        <select class="form-select" id="model_select" name="model_file" required>
-                            <option value="" disabled {% if not selected_model %}selected{% endif %}>
-                                -- Elige un modelo --
-                            </option>
-                            {% for model in model_list %}
-                                <option value="{{ model }}" {% if model == selected_model %}selected{% endif %}>
-                                    {{ model }}
-                                </option>
-                            {% endfor %}
-                        </select>
-                        {% if not model_list %}
-                            <div class="form-text text-danger">
-                                No se encontraron archivos .mzn en la carpeta /models.
+        <div class="row">
+            <div class="col-md-5">
+                <div class="card mb-3">
+                    <div class="card-header">
+                        <h5 class="mb-0">Configuración y Datos</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="schedule-form">
+                            <div class="mb-3">
+                                <label for="model_select" class="form-label">Seleccionar Modelo:</label>
+                                <select class="form-select" id="model_select" name="model_name">
+                                    {% for model in models %}
+                                        <option value="{{ model }}">{{ model | capitalize }}</option>
+                                    {% endfor %}
+                                </select>
                             </div>
-                        {% endif %}
+                            <div class="mb-3">
+                                <label for="data_content" class="form-label">Datos .dzn (MiniZinc Data File):</label>
+                                <textarea class="form-control" id="data_content" name="data_content" rows="15" required>// Ingrese aquí los datos .dzn</textarea>
+                            </div>
+                            <button type="submit" class="btn btn-primary w-100">Ejecutar MiniZinc</button>
+                        </form>
                     </div>
-                    <div class="mb-3">
-                         <label for="dzn_file_input" class="form-label">
-                            <strong>B. Cargar Instancia (.dzn)</strong>
-                        </label>
-                        <input type="file" class="form-control" id="dzn_file_input" name="dzn_file" accept=".dzn" required>
+                </div>
+            </div>
+
+            <div class="col-md-7">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0">Resultados</h5>
                     </div>
-                    <button class="btn btn-primary w-100" type="submit">Ejecutar Modelo</button>
-                </form>
+                    <div class="card-body">
+                        <div id="result-summary" class="alert alert-info" role="alert">
+                            Esperando ejecución...
+                        </div>
+                        <div id="gantt-chart" class="gantt-container"></div>
+                    </div>
+                </div>
             </div>
         </div>
-
-        {% if graph_json or error %}
-        <div class="card shadow-sm mt-4">
-            <div class="card-header">
-                <strong>2. Resultados de la Ejecución</strong>
-            </div>
-            <div class="card-body">
-                {% if error %}
-                    <div class="alert alert-danger" role="alert">
-                        <strong>Error:</strong> {{ error }}
-                    </div>
-                {% elif graph_json %}
-                    <div class="alert alert-success" role="alert">
-                        Se encontró una solución para <strong>{{ filename }}</strong> 
-                        usando el modelo <strong>{{ selected_model }}</strong>.
-                        <br>
-                        <strong>Makespan (Tiempo Total): {{ makespan }}</strong>
-                    </div>
-                    <div id="ganttChart"></div>
-                {% endif %}
-            </div>
-        </div>
-        {% endif %}
-
     </div>
 
     <script>
-        // Esta variable 'graph_json' es inyectada por Flask
-        var graphData = {{ graph_json | safe }};
-
-        if (graphData) {
-            var fig = JSON.parse(graphData);
-            var chartDiv = document.getElementById('ganttChart');
+        document.getElementById('schedule-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const form = e.target;
+            const formData = new FormData(form);
+            const summaryDiv = document.getElementById('result-summary');
+            const chartDiv = document.getElementById('gantt-chart');
             
-            // Usar Plotly.js para dibujar el gráfico
-            Plotly.newPlot(chartDiv, fig.data, fig.layout, {responsive: true});
+            summaryDiv.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"><span class="visually-hidden">Loading...</span></div> Ejecutando...';
+            chartDiv.innerHTML = '';
+
+            try {
+                const response = await fetch('/execute', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    summaryDiv.className = 'alert alert-success';
+                    const data = result.data;
+                    
+                    if (result.model === 'operarios') {
+                        summaryDiv.innerHTML = `
+                            Modelo: Operarios
+                            <br><strong>Makespan:</strong> ${data.makespan}
+                            <br><strong>Balance de Carga:</strong> ${data.balance}
+                        `;
+                        drawOperariosGantt(data.tasks, chartDiv);
+                    } else if (result.model === 'mantenimiento') {
+                        summaryDiv.innerHTML = `
+                            Modelo: Mantenimiento
+                            <br><strong>Makespan:</strong> ${data.makespan}
+                        `;
+                        drawMantenimientoGantt(data.tasks, data.maint_intervals, chartDiv);
+                    }
+                } else {
+                    summaryDiv.className = 'alert alert-danger';
+                    summaryDiv.innerHTML = `Error: ${result.error || 'Desconocido'}<br>Consulta la consola para más detalles.`;
+                    console.error("MiniZinc Error:", result.raw_output || result.error);
+                }
+            } catch (error) {
+                summaryDiv.className = 'alert alert-danger';
+                summaryDiv.innerHTML = `Error de Conexión:** ${error.message}`;
+                console.error("Fetch Error:", error);
+            }
+        });
+
+        // Graficación Plotly.js
+
+        function drawOperariosGantt(tasks, chartDiv) {
+            const data = tasks.map(t => ({
+                type: 'bar',
+                x: [t.Finish - t.Start],
+                y: [`M: ${t.Machine}`],
+                base: t.Start,
+                orientation: 'h',
+                name: `J${t.Job}T${t.Task}`,
+                marker: { 
+                    color: `hsl(${t.Job * 50 % 360}, 70%, 50%)` 
+                },
+                hoverinfo: 'text',
+                text: `Job ${t.Job}, Task ${t.Task}<br>Op ${t.Operator}<br>Start: ${t.Start}<br>Finish: ${t.Finish}`,
+                showlegend: false
+            }));
+
+            const layout = {
+                title: 'Programación de Tareas por Máquina (Operarios)',
+                xaxis: { title: 'Tiempo', rangemode: 'tozero' },
+                yaxis: { title: 'Máquina', automargin: true },
+                barmode: 'stack',
+                hovermode: 'closest'
+            };
+
+            Plotly.newPlot(chartDiv, data, layout);
+        }
+
+        function drawMantenimientoGantt(tasks, maintIntervals, chartDiv) {
+            let data = [];
+            
+            // 1. Tareas (Operaciones)
+            tasks.forEach(t => {
+                data.push({
+                    type: 'bar',
+                    x: [t.Finish - t.Start],
+                    y: [`M: ${t.Machine}`],
+                    base: t.Start,
+                    orientation: 'h',
+                    name: `J${t.Job}O${t.Operation}`,
+                    marker: { 
+                        color: `hsl(${t.Job * 50 % 360}, 70%, 50%)` 
+                    },
+                    hoverinfo: 'text',
+                    text: `Job ${t.Job}, Op ${t.Operation}<br>Start: ${t.Start}<br>Finish: ${t.Finish}`,
+                    showlegend: false
+                });
+            });
+
+            // 2. Mantenimiento
+            maintIntervals.forEach(m => {
+                data.push({
+                    type: 'bar',
+                    x: [m.Finish - m.Start],
+                    y: [`M: ${m.Machine}`],
+                    base: m.Start,
+                    orientation: 'h',
+                    name: `Mantenimiento M${m.Machine}`,
+                    marker: { 
+                        color: 'rgba(255, 0, 0, 0.5)' // Rojo semi-transparente
+                    },
+                    hoverinfo: 'text',
+                    text: `MANTENIMIENTO M${m.Machine}<br>Start: ${m.Start}<br>Finish: ${m.Finish}`,
+                    showlegend: true
+                });
+            });
+
+            const layout = {
+                title: 'Programación de Tareas y Mantenimiento por Máquina',
+                xaxis: { title: 'Tiempo', rangemode: 'tozero' },
+                yaxis: { title: 'Máquina', automargin: true },
+                barmode: 'stack',
+                hovermode: 'closest'
+            };
+
+            Plotly.newPlot(chartDiv, data, layout);
         }
     </script>
 </body>

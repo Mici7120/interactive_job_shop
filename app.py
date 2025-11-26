@@ -1,139 +1,139 @@
+from flask import Flask, render_template, request, jsonify
+from minizinc import Instance, Model, Solver
+from datetime import timedelta
+import re
 import os
-import minizinc
-import plotly.express as px
-import pandas as pd
-import json
-import glob  # <-- CAMBIO: Necesario para buscar archivos
-from flask import Flask, render_template, request, redirect, url_for
-from werkzeug.utils import secure_filename
-from datetime import datetime, timedelta
 
-# --- Configuración de Flask ---
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads/'
-app.config['MODEL_FOLDER'] = 'models/'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+gecode = Solver.lookup("gecode")
 
-# --- Ruta Principal (GET y POST) ---
-@app.route('/', methods=['GET', 'POST'])
+MODELS = {
+    "operarios": "job_shop-operarios.mzn",
+    "mantenimiento": "job_shop-mantenimiento.mzn"
+}
+
+# --- Funciones de Parseo ---
+
+def parse_operarios_output(output):
+    results = {}
+    
+    # Extraer makespan y balance
+    makespan_match = re.search(r'makespan=(\d+);', output)
+    balance_match = re.search(r'balance=(\d+);', output)
+    
+    if makespan_match:
+        results['makespan'] = int(makespan_match.group(1))
+    if balance_match:
+        results['balance'] = int(balance_match.group(1))
+
+    # Extraer las tareas
+    task_data_raw = re.findall(r'\((.+?)\)', output)
+    results['tasks'] = []
+    
+    # Formato: (job,task,operator,start,finish,machine)
+    for task_raw in task_data_raw:
+        parts = [int(p.strip()) for p in task_raw.split(',')]
+        if len(parts) == 6:
+            results['tasks'].append({
+                'Job': parts[0],
+                'Task': parts[1],
+                'Operator': parts[2],
+                'Start': parts[3],
+                'Finish': parts[4],
+                'Machine': parts[5]
+            })
+    return results
+
+def parse_mantenimiento_output(output):
+    """Parsea la salida del modelo de mantenimiento."""
+    results = {'maint_intervals': []}
+    
+    # Extraer makespan
+    makespan_match = re.search(r'makespan=(\d+);', output)
+    if makespan_match:
+        results['makespan'] = int(makespan_match.group(1))
+
+    # Extraer las operaciones
+    ops_data_raw = re.findall(r'operaciones=\[([\s\S]*?)\];', output)[0]
+    ops_list_raw = re.findall(r'\((.+?)\)', ops_data_raw)
+    results['tasks'] = []
+    
+    # Formato: (job,op,start,end,machine)
+    for op_raw in ops_list_raw:
+        parts = [int(p.strip()) for p in op_raw.split(',')]
+        if len(parts) == 5:
+            results['tasks'].append({
+                'Job': parts[0],
+                'Operation': parts[1],
+                'Start': parts[2],
+                'Finish': parts[3],
+                'Machine': parts[4]
+            })
+
+    # Extraer el mantenimiento
+    maint_data_raw = re.findall(r'mantenimiento=\[([\s\S]*?)\];', output)[0]
+    maint_list_raw = re.findall(r'\((.+?)\)', maint_data_raw)
+    
+    # Formato: (machine,start,end)
+    for maint_raw in maint_list_raw:
+        parts = [int(p.strip()) for p in maint_raw.split(',')]
+        if len(parts) == 3:
+            results['maint_intervals'].append({
+                'Machine': parts[0],
+                'Start': parts[1],
+                'Finish': parts[2]
+            })
+
+    return results
+
+# Rutas Flask
+
+@app.route('/')
 def index():
-    # --- CAMBIO: Obtener la lista de modelos .mzn disponibles ---
-    # Busca todos los archivos que terminen en .mzn en la carpeta de modelos
-    model_files_path = os.path.join(app.config['MODEL_FOLDER'], '*.mzn')
-    model_files = glob.glob(model_files_path)
-    # Extraemos solo el nombre del archivo (ej. 'jssp.mzn')
-    model_list = [os.path.basename(f) for f in model_files]
-    # --- Fin del cambio ---
+    return render_template('index.html', models=MODELS.keys())
 
-    if request.method == 'POST':
-        # 1. Manejar la carga del archivo .dzn
-        if 'dzn_file' not in request.files:
-            return redirect(request.url)
+@app.route('/execute', methods=['POST'])
+def execute_model():
+    model_name = request.form.get('model_name')
+    data_content = request.form.get('data_content')
+    
+    if model_name not in MODELS:
+        return jsonify({'error': 'Modelo no válido'}), 400
+
+    mzn_file = MODELS[model_name]
+    
+    try:
+        model = Model(mzn_file)
         
-        file = request.files['dzn_file']
-        if file.filename == '':
-            return redirect(request.url)
+        instance = Instance(gecode, model)
         
-        # --- CAMBIO: Obtener el modelo seleccionado del formulario ---
-        selected_model_name = request.form.get('model_file')
-        if not selected_model_name or selected_model_name not in model_list:
-            # Si el modelo no es válido, recargar con error
-            return render_template('index.html', 
-                                   error="Modelo .mzn seleccionado no es válido.", 
-                                   model_list=model_list)
-        # --- Fin del cambio ---
-
-        if file and file.filename.endswith('.dzn'):
-            filename = secure_filename(file.filename)
-            dzn_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(dzn_path)
+        # Crear un archivo .dzn temporal para cargar los datos
+        temp_dzn_path = f"temp_data_{model_name}.dzn"
+        with open(temp_dzn_path, 'w') as f:
+            f.write(data_content)
             
-            # --- CAMBIO: Usar el modelo seleccionado dinámicamente ---
-            model_path = os.path.join(app.config['MODEL_FOLDER'], selected_model_name)
-            # --- Fin del cambio ---
-            
-            try:
-                # Configurar la instancia de MiniZinc
-                gecode = minizinc.Solver.lookup("gecode")
-                # El modelo se carga desde el model_path dinámico
-                instance = minizinc.Instance(gecode, minizinc.Model(model_path))
-                instance.add_file(dzn_path)
-                
-                # Resolver el problema
-                result = instance.solve(timeout=timedelta(seconds=30))
-                
-                if result.solution:
-                    # 3. Procesar la salida (Parser)
-                    gantt_data = parse_solution_for_gantt(result)
-                    
-                    # 4. Generar visualización (Diagrama de Gantt)
-                    graph_json = create_gantt_chart(gantt_data)
-                    
-                    # Renderizar la plantilla con los resultados
-                    return render_template('index.html', 
-                                           graph_json=graph_json, 
-                                           makespan=result.solution.makespan,
-                                           filename=filename,
-                                           model_list=model_list, # <-- CAMBIO: Pasar lista
-                                           selected_model=selected_model_name # <-- CAMBIO: Pasar selección
-                                          )
-                else:
-                    error_msg = "No se encontró solución."
-                    # <-- CAMBIO: Pasar model_list al renderizar error
-                    return render_template('index.html', error=error_msg, model_list=model_list)
-            
-            except Exception as e:
-                # <-- CAMBIO: Pasar model_list al renderizar error
-                return render_template('index.html', error=str(e), model_list=model_list)
+        instance.add_file(temp_dzn_path)
+        
+        result = instance.solve(timeout=timedelta(seconds=30))
+        raw_output = str(result)
+        
+        if model_name == "operarios":
+            parsed_data = parse_operarios_output(raw_output)
+        elif model_name == "mantenimiento":
+            parsed_data = parse_mantenimiento_output(raw_output)
+        else:
+            parsed_data = {"message": "Modelo desconocido."}
 
-    # Método GET: Simplemente mostrar la página
-    # <-- CAMBIO: Pasar la lista de modelos a la plantilla
-    return render_template('index.html', model_list=model_list)
+        # Eliminar el archivo temporal
+        os.remove(temp_dzn_path)
 
-# --- (El resto de las funciones parse_solution_for_gantt y create_gantt_chart) ---
-# --- (No necesitan cambios) ---
+        return jsonify({'success': True, 'model': model_name, 'data': parsed_data})
 
-def parse_solution_for_gantt(result):
-    """ Convierte la salida de MiniZinc en un formato listo para Plotly. """
-    data = []
-    
-    # Extraer los datos de la solución
-    starts = result.solution.start
-    durations = result.solution.duration
-    machines = result.solution.machines
-    n_jobs, n_ops = len(starts), len(starts[0])
-
-    # Usamos una fecha base arbitraria para el Gantt
-    base_time = datetime(2025, 1, 1) 
-
-    for j in range(n_jobs):
-        for o in range(n_ops):
-            start_time = starts[j][o]
-            duration = durations[j][o]
-            machine = machines[j][o]
-            
-            data.append(dict(
-                Task=f"Máquina {machine}", 
-                Start=base_time + timedelta(seconds=int(start_time)),
-                Finish=base_time + timedelta(seconds=int(start_time + duration)),
-                Resource=f"Trabajo {j + 1}"
-            ))
-    return data
-
-def create_gantt_chart(data):
-    """ Genera el JSON del diagrama de Gantt usando Plotly Express. """
-    df = pd.DataFrame(data)
-    
-    fig = px.timeline(df, 
-                      x_start="Start", 
-                      x_end="Finish", 
-                      y="Task", 
-                      color="Resource",
-                      title="Diagrama de Gantt (Job Shop Scheduling)")
-    
-    fig.update_yaxes(autorange="reversed") 
-    return json.dumps(fig, cls=plotly.utils.PlotlyJSONEncoder)
-
+    except Exception as e:
+        # Intentar eliminar el archivo temporal si existe
+        if 'temp_dzn_path' in locals() and os.path.exists(temp_dzn_path):
+            os.remove(temp_dzn_path)
+        return jsonify({'error': f"Error al ejecutar MiniZinc: {str(e)}", 'raw_output': raw_output if 'raw_output' in locals() else 'N/A'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)
